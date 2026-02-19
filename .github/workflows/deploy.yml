@@ -78,7 +78,9 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Construir con SAM
-        run: sam build
+        run: |
+          export PATH="$PATH:$(pwd)/node_modules/.bin"
+          sam build
 
       - name: Desplegar con SAM
         run: |

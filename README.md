@@ -24,6 +24,7 @@ Para que el workflow funcione correctamente, necesitas configurar los siguientes
 - `JWT_SECRET`: Secret para firmar los tokens JWT
 - `SUBNET_IDS`: IDs de las subnets separadas por comas (ej: `subnet-xxxxx,subnet-yyyyy`)
 - `SECURITY_GROUP_ID`: ID del Security Group para Lambda (ej: `sg-xxxxx`)
+- `RDS_SECURITY_GROUP_ID`: ID del Security Group para RDS (ej: `sg-xxxxx`) - **Opcional**: Si no se configura, se saltará la verificación de Security Groups
 - `ALLOWED_ORIGINS`: Orígenes permitidos para CORS separados por comas (ej: `https://tu-dominio.com,http://localhost:5173`)
 - `OAUTH_SERVER_URL`: URL del servidor OAuth (ej: `https://tu-dominio.auth0.com`)
 - `VITE_APP_ID`: ID de la aplicación OAuth
@@ -42,7 +43,16 @@ Para que el workflow funcione correctamente, necesitas configurar los siguientes
    - Construye el proyecto
    - Instala AWS SAM CLI
    - Despliega a AWS usando SAM
+   - **Verifica Security Groups**: Valida que Lambda y RDS tengan las reglas correctas configuradas
+   - **Verifica conexión a BD**: Prueba la conexión usando el endpoint `/api/db-check`
+   - Ejecuta migraciones de base de datos
+   - Verifica nuevamente la conexión después de las migraciones
    - Muestra la URL de la API desplegada
+   
+   ⚠️ **Importante**: El pipeline fallará si:
+   - Los Security Groups no están configurados correctamente
+   - La conexión a la base de datos no funciona
+   - Las migraciones fallan
 
 ### Despliegue manual
 

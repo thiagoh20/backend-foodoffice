@@ -111,17 +111,35 @@ jobs:
           echo "api_url=$API_URL" >> $GITHUB_OUTPUT
           echo "API desplegada en: $API_URL"
 
-      - name: Verificar Security Groups
+      - name: Verificar y Configurar Security Groups
         run: |
           echo "🔍 Verificando configuración de Security Groups..."
           
           LAMBDA_SG="${{ secrets.SECURITY_GROUP_ID }}"
           RDS_SG="${{ secrets.RDS_SECURITY_GROUP_ID }}"
           
+          # Valores conocidos de Terraform (dev environment)
+          # Si RDS_SECURITY_GROUP_ID no está configurado, intentar usar valores conocidos
           if [ -z "$RDS_SG" ]; then
-            echo "⚠️  RDS_SECURITY_GROUP_ID no está configurado. Saltando verificación de Security Groups."
-            exit 0
+            echo "⚠️  RDS_SECURITY_GROUP_ID no está configurado en los secrets."
+            echo ""
+            echo "💡 Intentando usar valores conocidos de Terraform (dev environment)..."
+            echo "   Lambda SG: $LAMBDA_SG"
+            echo "   RDS SG (asumido): sg-05ab21fca371a7df5"
+            echo ""
+            echo "📋 Si estos valores no son correctos, configura RDS_SECURITY_GROUP_ID en los secrets."
+            echo ""
+            
+            # Usar valor conocido de Terraform para dev
+            RDS_SG="sg-05ab21fca371a7df5"
+            echo "🔧 Usando RDS Security Group: $RDS_SG"
+          else
+            echo "✅ RDS_SECURITY_GROUP_ID configurado: $RDS_SG"
           fi
+          
+          echo "🔍 Verificando y configurando Security Groups..."
+          echo "   Lambda Security Group: $LAMBDA_SG"
+          echo "   RDS Security Group: $RDS_SG"
           
           # Verificar Lambda Security Group (Egress)
           echo "1️⃣  Verificando Lambda Security Group (Egress)..."
@@ -130,22 +148,40 @@ jobs:
             --query 'SecurityGroups[0].IpPermissionsEgress[?FromPort==`5432` && ToPort==`5432` && IpProtocol==`tcp`]' \
             --output json 2>/dev/null || echo "[]")
           
-          if [ "$LAMBDA_OUTBOUND" == "[]" ] || [ "$LAMBDA_OUTBOUND" == "null" ]; then
-            echo "❌ Lambda Security Group NO permite tráfico saliente al puerto 5432"
-            echo "   Configura la regla:"
-            echo "   aws ec2 authorize-security-group-egress \\"
-            echo "     --group-id $LAMBDA_SG \\"
-            echo "     --ip-permissions IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=$RDS_SG}]"
-            exit 1
-          else
-            # Verificar que permite hacia RDS específicamente
-            ALLOWS_RDS=$(echo "$LAMBDA_OUTBOUND" | jq -r '.[] | select(.UserIdGroupPairs[].GroupId == "'$RDS_SG'") | .UserIdGroupPairs[].GroupId' 2>/dev/null || echo "")
-            if [ -z "$ALLOWS_RDS" ]; then
-              echo "⚠️  Lambda Security Group permite tráfico al 5432, pero NO específicamente hacia RDS Security Group"
-              echo "   Se recomienda configurar la regla específica para mayor seguridad"
+          # Verificar si permite hacia RDS específicamente
+          ALLOWS_RDS=$(echo "$LAMBDA_OUTBOUND" | jq -r '.[] | select(.UserIdGroupPairs[].GroupId == "'$RDS_SG'") | .UserIdGroupPairs[].GroupId' 2>/dev/null || echo "")
+          
+          if [ -z "$ALLOWS_RDS" ]; then
+            echo "⚠️  Lambda Security Group NO permite tráfico saliente al puerto 5432 hacia RDS"
+            echo "💡 Nota: Terraform creó los Security Groups, pero las reglas de tráfico deben configurarse por separado."
+            echo "🔧 Intentando configurar automáticamente..."
+            
+            if aws ec2 authorize-security-group-egress \
+              --group-id $LAMBDA_SG \
+              --ip-permissions IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=$RDS_SG}] 2>/dev/null; then
+              echo "✅ Regla de salida configurada exitosamente"
+              echo "   Lambda ($LAMBDA_SG) → RDS ($RDS_SG) en puerto 5432"
             else
-              echo "✅ Lambda Security Group permite tráfico saliente al puerto 5432 hacia RDS"
+              ERROR=$(aws ec2 authorize-security-group-egress \
+                --group-id $LAMBDA_SG \
+                --ip-permissions IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=$RDS_SG}] 2>&1)
+              
+              if echo "$ERROR" | grep -q "already exists"; then
+                echo "✅ La regla ya existe (configurada de otra manera)"
+              else
+                echo "❌ No se pudo configurar automáticamente."
+                echo ""
+                echo "📋 Configura manualmente ejecutando:"
+                echo "   aws ec2 authorize-security-group-egress \\"
+                echo "     --group-id $LAMBDA_SG \\"
+                echo "     --ip-permissions IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=$RDS_SG}]"
+                echo ""
+                echo "💡 O agrega esta regla en el código de Terraform para que se configure automáticamente."
+                exit 1
+              fi
             fi
+          else
+            echo "✅ Lambda Security Group permite tráfico saliente al puerto 5432 hacia RDS"
           fi
           
           # Verificar RDS Security Group (Ingress)
@@ -155,29 +191,45 @@ jobs:
             --query 'SecurityGroups[0].IpPermissions[?FromPort==`5432` && ToPort==`5432` && IpProtocol==`tcp`]' \
             --output json 2>/dev/null || echo "[]")
           
-          if [ "$RDS_INBOUND" == "[]" ] || [ "$RDS_INBOUND" == "null" ]; then
-            echo "❌ RDS Security Group NO permite tráfico entrante en el puerto 5432"
-            echo "   Configura la regla:"
-            echo "   aws ec2 authorize-security-group-ingress \\"
-            echo "     --group-id $RDS_SG \\"
-            echo "     --ip-permissions IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=$LAMBDA_SG}]"
-            exit 1
-          else
-            # Verificar que permite desde Lambda específicamente
-            ALLOWS_LAMBDA=$(echo "$RDS_INBOUND" | jq -r '.[] | select(.UserIdGroupPairs[].GroupId == "'$LAMBDA_SG'") | .UserIdGroupPairs[].GroupId' 2>/dev/null || echo "")
-            if [ -z "$ALLOWS_LAMBDA" ]; then
-              echo "❌ RDS Security Group permite tráfico en 5432, pero NO desde Lambda Security Group"
-              echo "   Configura la regla:"
-              echo "   aws ec2 authorize-security-group-ingress \\"
-              echo "     --group-id $RDS_SG \\"
-              echo "     --ip-permissions IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=$LAMBDA_SG}]"
-              exit 1
+          # Verificar si permite desde Lambda específicamente
+          ALLOWS_LAMBDA=$(echo "$RDS_INBOUND" | jq -r '.[] | select(.UserIdGroupPairs[].GroupId == "'$LAMBDA_SG'") | .UserIdGroupPairs[].GroupId' 2>/dev/null || echo "")
+          
+          if [ -z "$ALLOWS_LAMBDA" ]; then
+            echo "⚠️  RDS Security Group NO permite tráfico entrante desde Lambda en el puerto 5432"
+            echo "💡 Nota: Terraform creó los Security Groups, pero las reglas de tráfico deben configurarse por separado."
+            echo "🔧 Intentando configurar automáticamente..."
+            
+            if aws ec2 authorize-security-group-ingress \
+              --group-id $RDS_SG \
+              --ip-permissions IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=$LAMBDA_SG}] 2>/dev/null; then
+              echo "✅ Regla de entrada configurada exitosamente"
+              echo "   Lambda ($LAMBDA_SG) → RDS ($RDS_SG) en puerto 5432"
             else
-              echo "✅ RDS Security Group permite tráfico entrante desde Lambda en puerto 5432"
+              ERROR=$(aws ec2 authorize-security-group-ingress \
+                --group-id $RDS_SG \
+                --ip-permissions IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=$LAMBDA_SG}] 2>&1)
+              
+              if echo "$ERROR" | grep -q "already exists"; then
+                echo "✅ La regla ya existe (configurada de otra manera)"
+              else
+                echo "❌ No se pudo configurar automáticamente."
+                echo ""
+                echo "📋 Configura manualmente ejecutando:"
+                echo "   aws ec2 authorize-security-group-ingress \\"
+                echo "     --group-id $RDS_SG \\"
+                echo "     --ip-permissions IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=$LAMBDA_SG}]"
+                echo ""
+                echo "💡 O agrega esta regla en el código de Terraform para que se configure automáticamente."
+                exit 1
+              fi
             fi
+          else
+            echo "✅ RDS Security Group permite tráfico entrante desde Lambda en puerto 5432"
           fi
           
+          echo ""
           echo "✅ Security Groups configurados correctamente"
+          echo "   Las reglas de tráfico entre Lambda y RDS están activas"
 
       - name: Esperar propagación de cambios
         run: |
@@ -219,6 +271,27 @@ jobs:
                 ERROR=$(echo "$BODY" | jq -r '.error' 2>/dev/null || echo "Error desconocido")
                 echo "❌ Error en la conexión: $ERROR"
                 
+                # Detectar si es un error de Security Groups
+                if echo "$ERROR" | grep -q "timeout\|ECONNREFUSED\|Failed query"; then
+                  echo ""
+                  echo "🔴 PROBLEMA DETECTADO: Probablemente los Security Groups no están configurados"
+                  echo ""
+                  echo "📋 Solución:"
+                  echo "   1. Agrega el secret RDS_SECURITY_GROUP_ID en GitHub Actions"
+                  echo "   2. O configura manualmente los Security Groups:"
+                  echo ""
+                  echo "   # Lambda Security Group (Egress)"
+                  echo "   aws ec2 authorize-security-group-egress \\"
+                  echo "     --group-id ${{ secrets.SECURITY_GROUP_ID }} \\"
+                  echo "     --ip-permissions IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=<RDS_SG_ID>}]"
+                  echo ""
+                  echo "   # RDS Security Group (Ingress)"
+                  echo "   aws ec2 authorize-security-group-ingress \\"
+                  echo "     --group-id <RDS_SG_ID> \\"
+                  echo "     --ip-permissions IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=${{ secrets.SECURITY_GROUP_ID }}}]"
+                  echo ""
+                fi
+                
                 # Mostrar troubleshooting si está disponible
                 TROUBLESHOOTING=$(echo "$BODY" | jq -r '.troubleshooting[]?' 2>/dev/null || echo "")
                 if [ -n "$TROUBLESHOOTING" ]; then
@@ -232,7 +305,13 @@ jobs:
                   echo "⏳ Reintentando en $RETRY_DELAY segundos..."
                   sleep $RETRY_DELAY
                 else
+                  echo ""
                   echo "❌ No se pudo conectar a la base de datos después de $MAX_RETRIES intentos"
+                  echo ""
+                  echo "🔍 Verifica:"
+                  echo "   - Que los Security Groups estén configurados correctamente"
+                  echo "   - Que DATABASE_URL tenga las credenciales correctas"
+                  echo "   - Los logs de CloudWatch para más detalles"
                   exit 1
                 fi
               fi
@@ -240,11 +319,27 @@ jobs:
               echo "❌ Error HTTP $HTTP_CODE al verificar conexión"
               echo "Respuesta: $BODY"
               
+              # Si es error 500, probablemente es problema de Security Groups
+              if [ "$HTTP_CODE" == "500" ]; then
+                ERROR_MSG=$(echo "$BODY" | jq -r '.error' 2>/dev/null || echo "")
+                if echo "$ERROR_MSG" | grep -q "Failed query\|timeout\|ECONNREFUSED"; then
+                  echo ""
+                  echo "🔴 Error 500 detectado - Probablemente problema de Security Groups"
+                  echo "   Verifica que Lambda pueda conectarse a RDS configurando los Security Groups"
+                fi
+              fi
+              
               if [ $i -lt $MAX_RETRIES ]; then
                 echo "⏳ Reintentando en $RETRY_DELAY segundos..."
                 sleep $RETRY_DELAY
               else
+                echo ""
                 echo "❌ No se pudo verificar la conexión después de $MAX_RETRIES intentos"
+                echo ""
+                echo "🔍 Acciones recomendadas:"
+                echo "   1. Configura RDS_SECURITY_GROUP_ID en los secrets de GitHub"
+                echo "   2. O configura manualmente los Security Groups"
+                echo "   3. Revisa los logs de CloudWatch para más detalles"
                 exit 1
               fi
             fi

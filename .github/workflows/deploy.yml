@@ -191,11 +191,14 @@ jobs:
             --query 'SecurityGroups[0].IpPermissions[?FromPort==`5432` && ToPort==`5432` && IpProtocol==`tcp`]' \
             --output json 2>/dev/null || echo "[]")
           
+          echo "   Reglas de entrada encontradas:"
+          echo "$RDS_INBOUND" | jq '.' 2>/dev/null || echo "$RDS_INBOUND"
+          
           # Verificar si permite desde Lambda específicamente
           ALLOWS_LAMBDA=$(echo "$RDS_INBOUND" | jq -r '.[] | select(.UserIdGroupPairs[].GroupId == "'$LAMBDA_SG'") | .UserIdGroupPairs[].GroupId' 2>/dev/null || echo "")
           
           if [ -z "$ALLOWS_LAMBDA" ]; then
-            echo "⚠️  RDS Security Group NO permite tráfico entrante desde Lambda en el puerto 5432"
+            echo "⚠️  RDS Security Group NO permite tráfico entrante desde Lambda ($LAMBDA_SG) en el puerto 5432"
             echo "💡 Nota: Terraform creó los Security Groups, pero las reglas de tráfico deben configurarse por separado."
             echo "🔧 Intentando configurar automáticamente..."
             
@@ -210,9 +213,23 @@ jobs:
                 --ip-permissions IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=$LAMBDA_SG}] 2>&1)
               
               if echo "$ERROR" | grep -q "already exists"; then
-                echo "✅ La regla ya existe (configurada de otra manera)"
+                echo "✅ La regla ya existe (puede estar configurada de otra manera)"
+                echo "   Verificando nuevamente..."
+                # Verificar nuevamente después del intento
+                RDS_INBOUND_NEW=$(aws ec2 describe-security-groups \
+                  --group-ids $RDS_SG \
+                  --query 'SecurityGroups[0].IpPermissions[?FromPort==`5432` && ToPort==`5432` && IpProtocol==`tcp`]' \
+                  --output json 2>/dev/null || echo "[]")
+                ALLOWS_LAMBDA_NEW=$(echo "$RDS_INBOUND_NEW" | jq -r '.[] | select(.UserIdGroupPairs[].GroupId == "'$LAMBDA_SG'") | .UserIdGroupPairs[].GroupId' 2>/dev/null || echo "")
+                if [ -n "$ALLOWS_LAMBDA_NEW" ]; then
+                  echo "✅ Confirmado: RDS permite tráfico desde Lambda"
+                else
+                  echo "⚠️  La regla existe pero no permite específicamente desde Lambda Security Group"
+                  echo "   Puede que permita desde cualquier IP (0.0.0.0/0) o desde otro Security Group"
+                fi
               else
                 echo "❌ No se pudo configurar automáticamente."
+                echo "   Error: $ERROR"
                 echo ""
                 echo "📋 Configura manualmente ejecutando:"
                 echo "   aws ec2 authorize-security-group-ingress \\"
@@ -224,17 +241,33 @@ jobs:
               fi
             fi
           else
-            echo "✅ RDS Security Group permite tráfico entrante desde Lambda en puerto 5432"
+            echo "✅ RDS Security Group permite tráfico entrante desde Lambda ($LAMBDA_SG) en puerto 5432"
           fi
           
           echo ""
           echo "✅ Security Groups configurados correctamente"
           echo "   Las reglas de tráfico entre Lambda y RDS están activas"
+          
+          # Verificación final detallada
+          echo ""
+          echo "🔍 Verificación final de Security Groups:"
+          echo "   Lambda SG ($LAMBDA_SG) - Egress hacia RDS:"
+          aws ec2 describe-security-groups \
+            --group-ids $LAMBDA_SG \
+            --query 'SecurityGroups[0].IpPermissionsEgress[?FromPort==`5432` && ToPort==`5432` && IpProtocol==`tcp`]' \
+            --output json 2>/dev/null | jq '.' || echo "   No se pudo verificar"
+          
+          echo "   RDS SG ($RDS_SG) - Ingress desde Lambda:"
+          aws ec2 describe-security-groups \
+            --group-ids $RDS_SG \
+            --query 'SecurityGroups[0].IpPermissions[?FromPort==`5432` && ToPort==`5432` && IpProtocol==`tcp`]' \
+            --output json 2>/dev/null | jq '.' || echo "   No se pudo verificar"
 
       - name: Esperar propagación de cambios
         run: |
-          echo "⏳ Esperando 15 segundos para que los cambios se propaguen..."
-          sleep 15
+          echo "⏳ Esperando 30 segundos para que los cambios de Security Groups se propaguen..."
+          echo "   Los cambios en Security Groups pueden tardar hasta 30 segundos en aplicarse"
+          sleep 30
 
       - name: Verificar conexión a base de datos
         run: |
@@ -305,14 +338,57 @@ jobs:
                   echo "⏳ Reintentando en $RETRY_DELAY segundos..."
                   sleep $RETRY_DELAY
                 else
+                echo ""
+                echo "❌ No se pudo conectar a la base de datos después de $MAX_RETRIES intentos"
+                echo ""
+                echo "🔍 Diagnóstico adicional:"
+                echo ""
+                echo "1️⃣  Verificando configuración de Lambda..."
+                LAMBDA_FUNCTION=$(aws lambda list-functions \
+                  --query 'Functions[?contains(FunctionName, `foodoffice-backend`) && contains(FunctionName, `ApiFunction`)].FunctionName' \
+                  --output text 2>/dev/null | head -1)
+                
+                if [ -n "$LAMBDA_FUNCTION" ]; then
+                  echo "   Función: $LAMBDA_FUNCTION"
+                  echo "   VPC Config:"
+                  aws lambda get-function-configuration \
+                    --function-name "$LAMBDA_FUNCTION" \
+                    --query 'VpcConfig' \
+                    --output json 2>/dev/null | jq '.' || echo "   No se pudo obtener"
+                  
                   echo ""
-                  echo "❌ No se pudo conectar a la base de datos después de $MAX_RETRIES intentos"
-                  echo ""
-                  echo "🔍 Verifica:"
-                  echo "   - Que los Security Groups estén configurados correctamente"
-                  echo "   - Que DATABASE_URL tenga las credenciales correctas"
-                  echo "   - Los logs de CloudWatch para más detalles"
-                  exit 1
+                  echo "2️⃣  Últimos logs de CloudWatch (últimas 10 líneas):"
+                  LOG_GROUP="/aws/lambda/$LAMBDA_FUNCTION"
+                  aws logs tail "$LOG_GROUP" --since 5m --format short 2>/dev/null | tail -10 || echo "   No se pudieron obtener logs"
+                fi
+                
+                echo ""
+                echo "3️⃣  Verificando Security Groups una vez más..."
+                LAMBDA_SG="${{ secrets.SECURITY_GROUP_ID }}"
+                RDS_SG="${{ secrets.RDS_SECURITY_GROUP_ID }}"
+                if [ -z "$RDS_SG" ]; then
+                  RDS_SG="sg-05ab21fca371a7df5"
+                fi
+                
+                echo "   Lambda SG ($LAMBDA_SG) - Reglas de salida al 5432:"
+                aws ec2 describe-security-groups \
+                  --group-ids $LAMBDA_SG \
+                  --query 'SecurityGroups[0].IpPermissionsEgress[?FromPort==`5432` && ToPort==`5432`]' \
+                  --output json 2>/dev/null | jq '.' || echo "   Error al verificar"
+                
+                echo "   RDS SG ($RDS_SG) - Reglas de entrada en 5432:"
+                aws ec2 describe-security-groups \
+                  --group-ids $RDS_SG \
+                  --query 'SecurityGroups[0].IpPermissions[?FromPort==`5432` && ToPort==`5432`]' \
+                  --output json 2>/dev/null | jq '.' || echo "   Error al verificar"
+                
+                echo ""
+                echo "📋 Acciones recomendadas:"
+                echo "   1. Revisa los logs de CloudWatch para ver el error exacto"
+                echo "   2. Verifica que DATABASE_URL tenga las credenciales correctas"
+                echo "   3. Asegúrate de que RDS esté en el mismo VPC que Lambda"
+                echo "   4. Verifica que las subnets de Lambda tengan acceso a RDS"
+                exit 1
                 fi
               fi
             else

@@ -4,8 +4,8 @@ Description: FoodOffice Backend - Lambda + API Gateway
 
 Globals:
   Function:
-    Timeout: 28  # Free Tier: máximo 30s, usar 28s para margen de seguridad
-    MemorySize: 512  # Free Tier: hasta 512 MB incluido
+    Timeout: 28
+    MemorySize: 512
     Runtime: nodejs20.x
     Environment:
       Variables:
@@ -14,54 +14,64 @@ Globals:
 Parameters:
   DatabaseHost:
     Type: String
-    Description: RDS Database Endpoint (from Terraform output)
   DatabaseName:
     Type: String
     Default: foodoffice
-    Description: Database name
   DatabaseUser:
     Type: String
     Default: foodoffice
-    Description: Database username
   DatabasePassword:
     Type: String
     NoEcho: true
-    Description: Database password (use AWS Secrets Manager in production)
   JwtSecret:
     Type: String
     NoEcho: true
-    Description: JWT Secret for session cookies
   SubnetIds:
     Type: CommaDelimitedList
-    Description: Subnet IDs for Lambda (from Terraform output)
   SecurityGroupId:
     Type: String
-    Description: Security Group ID for Lambda to access RDS (from Terraform output)
   AllowedOrigins:
     Type: String
     Default: "*"
-    Description: Allowed CORS origins (comma-separated)
+  OAuthServerUrl:
+    Type: String
+    Default: ""
+  ViteAppId:
+    Type: String
+    Default: ""
+  OAuthClientSecret:
+    Type: String
+    Default: ""
+    NoEcho: true
+  OwnerOpenId:
+    Type: String
+    Default: ""
 
 Resources:
   ApiFunction:
     Type: AWS::Serverless::Function
+    Metadata:
+      # Esto le dice a SAM que compile el TS automáticamente
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: "node20"
+        Sourcemap: true
+        EntryPoints: 
+          - lambda.ts
     Properties:
-      CodeUri: ./
-      Handler: dist/lambda.handler
-      Runtime: nodejs20.x
-      Timeout: 28  # Free Tier: máximo 30s
-      MemorySize: 512  # Free Tier: hasta 512 MB
+      CodeUri: src/
+      Handler: lambda.handler # Se refiere al archivo lambda.js generado
       Environment:
         Variables:
-          DATABASE_URL: !Sub 
-            - 'postgresql://${DatabaseUser}:${DatabasePassword}@${DatabaseHost}:5432/${DatabaseName}'
-            - DatabaseHost: !Ref DatabaseHost
-              DatabaseUser: !Ref DatabaseUser
-              DatabasePassword: !Ref DatabasePassword
-              DatabaseName: !Ref DatabaseName
+          DATABASE_URL: !Sub 'postgresql://${DatabaseUser}:${DatabasePassword}@${DatabaseHost}:5432/${DatabaseName}'
           JWT_SECRET: !Ref JwtSecret
           NODE_ENV: production
           ALLOWED_ORIGINS: !Ref AllowedOrigins
+          OAUTH_SERVER_URL: !Ref OAuthServerUrl
+          VITE_APP_ID: !Ref ViteAppId
+          OAUTH_CLIENT_SECRET: !Ref OAuthClientSecret
+          OWNER_OPEN_ID: !Ref OwnerOpenId
       VpcConfig:
         SecurityGroupIds:
           - !Ref SecurityGroupId
@@ -94,20 +104,9 @@ Resources:
     Type: AWS::Serverless::HttpApi
     Properties:
       CorsConfiguration:
-        AllowOrigins: !Split
-          - ","
-          - !Ref AllowedOrigins
-        AllowMethods:
-          - GET
-          - POST
-          - PUT
-          - DELETE
-          - OPTIONS
-          - PATCH
-        AllowHeaders:
-          - Content-Type
-          - Authorization
-          - Cookie
+        AllowOrigins: !Split [",", !Ref AllowedOrigins]
+        AllowMethods: [GET, POST, PUT, DELETE, OPTIONS, PATCH]
+        AllowHeaders: [Content-Type, Authorization, Cookie]
         AllowCredentials: true
         MaxAge: 3600
 
@@ -115,9 +114,3 @@ Outputs:
   ApiUrl:
     Description: API Gateway endpoint URL
     Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com'
-  ApiFunctionArn:
-    Description: Lambda Function ARN
-    Value: !GetAtt ApiFunction.Arn
-  ApiFunctionName:
-    Description: Lambda Function Name
-    Value: !Ref ApiFunction

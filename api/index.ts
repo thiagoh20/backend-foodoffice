@@ -18,6 +18,40 @@ const app: Express = express();
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
+// Endpoint de prueba para Postman
+app.get("/api/test", (req: Request, res: Response) => {
+  res.json({
+    success: true,
+    message: "¡Endpoint de prueba funcionando correctamente!",
+    timestamp: new Date().toISOString(),
+    method: req.method,
+    path: req.path,
+    headers: {
+      "user-agent": req.get("user-agent"),
+      "content-type": req.get("content-type"),
+    },
+  });
+});
+
+// Endpoint de diagnóstico para verificar variables de entorno
+app.get("/api/env-check", async (req: Request, res: Response) => {
+  const { ENV } = await import("../src/_core/env.js");
+  res.json({
+    oauthConfigured: !!ENV.oAuthServerUrl,
+    oauthServerUrl: ENV.oAuthServerUrl || "(no configurado)",
+    appId: ENV.appId || "(no configurado)",
+    hasOAuthClientSecret: !!ENV.oAuthClientSecret,
+    isAuth0: ENV.isAuth0,
+    nodeEnv: process.env.NODE_ENV,
+    allEnvVars: {
+      OAUTH_SERVER_URL: process.env.OAUTH_SERVER_URL || "(no definido)",
+      VITE_APP_ID: process.env.VITE_APP_ID || "(no definido)",
+      OAUTH_CLIENT_SECRET: process.env.OAUTH_CLIENT_SECRET ? "***configurado***" : "(no definido)",
+      OWNER_OPEN_ID: process.env.OWNER_OPEN_ID || "(no definido)",
+    },
+  });
+});
+
 // OAuth routes
 registerOAuthRoutes(app);
 

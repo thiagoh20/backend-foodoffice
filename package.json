@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "NODE_ENV=development tsx watch src/_core/index.ts",
     "build": "npm run build:lambda && npm run build:server",
-    "build:lambda": "esbuild src/lambda.ts --platform=node --packages=external --bundle --format=esm --outdir=dist --out-extension:.js=.mjs",
+    "build:lambda": "esbuild src/lambda.ts --platform=node --packages=external --bundle --format=esm --outdir=dist --out-extension:.js=.js",
     "build:server": "esbuild src/_core/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
     "build:sam": "sam build",
     "start": "NODE_ENV=production node dist/index.js",

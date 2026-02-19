@@ -25,6 +25,10 @@ Para que el workflow funcione correctamente, necesitas configurar los siguientes
 - `SUBNET_IDS`: IDs de las subnets separadas por comas (ej: `subnet-xxxxx,subnet-yyyyy`)
 - `SECURITY_GROUP_ID`: ID del Security Group para Lambda (ej: `sg-xxxxx`)
 - `ALLOWED_ORIGINS`: Orígenes permitidos para CORS separados por comas (ej: `https://tu-dominio.com,http://localhost:5173`)
+- `OAUTH_SERVER_URL`: URL del servidor OAuth (ej: `https://tu-dominio.auth0.com`)
+- `VITE_APP_ID`: ID de la aplicación OAuth
+- `OAUTH_CLIENT_SECRET`: Secret del cliente OAuth
+- `OWNER_OPEN_ID`: OpenID del propietario/administrador (ej: `auth0|xxxxx`)
 
 ### Cómo funciona el workflow
 

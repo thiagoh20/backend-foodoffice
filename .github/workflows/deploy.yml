@@ -16,11 +16,37 @@ env:
   NODE_VERSION: '20'
 
 jobs:
- 
+  # test:
+  #   name: Ejecutar tests y verificaciones
+  #   runs-on: ubuntu-latest
+    
+  #   steps:
+  #     - name: Checkout código
+  #       uses: actions/checkout@v4
+
+  #     - name: Configurar Node.js
+  #       uses: actions/setup-node@v4
+  #       with:
+  #         node-version: ${{ env.NODE_VERSION }}
+  #         cache: 'npm'
+
+  #     - name: Instalar dependencias
+  #       run: npm ci
+
+  #     - name: Verificar tipos TypeScript
+  #       run: npm run check
+
+  #     - name: Ejecutar tests
+  #       run: npm test
+
+  #     - name: Construir proyecto
+  #       run: npm run build
+
   deploy:
     name: Desplegar a AWS
     runs-on: ubuntu-latest
     environment: aws
+    # needs: test
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     
     steps:
@@ -66,6 +92,10 @@ jobs:
               SubnetIds="${{ secrets.SUBNET_IDS }}" \
               SecurityGroupId="${{ secrets.SECURITY_GROUP_ID }}" \
               AllowedOrigins="${{ secrets.ALLOWED_ORIGINS }}" \
+              OAuthServerUrl="${{ secrets.OAUTH_SERVER_URL }}" \
+              ViteAppId="${{ secrets.VITE_APP_ID }}" \
+              OAuthClientSecret="${{ secrets.OAUTH_CLIENT_SECRET }}" \
+              OwnerOpenId="${{ secrets.OWNER_OPEN_ID }}" \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset
 

@@ -71,39 +71,40 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     const values: InsertUser = {
       openId: user.openId,
     };
-    const updateSet: Record<string, unknown> = {};
+    const updateSet: Partial<InsertUser> = {};
 
+    // Normalizar y asignar campos de texto (name, email, loginMethod)
     const textFields = ["name", "email", "loginMethod"] as const;
     type TextField = (typeof textFields)[number];
 
     const assignNullable = (field: TextField) => {
       const value = user[field];
       if (value === undefined) return;
-      const normalized = value ?? null;
+      // Normalizar: convertir cadenas vacías a null, y mantener null como null
+      const normalized = (value === "" || value === null) ? null : value;
       values[field] = normalized;
+      // Solo agregar al updateSet si el valor no es undefined
       updateSet[field] = normalized;
     };
 
     textFields.forEach(assignNullable);
 
+    // Manejar lastSignedIn
     if (user.lastSignedIn !== undefined) {
       values.lastSignedIn = user.lastSignedIn;
       updateSet.lastSignedIn = user.lastSignedIn;
+    } else {
+      values.lastSignedIn = new Date();
+      updateSet.lastSignedIn = values.lastSignedIn;
     }
+
+    // Manejar role
     if (user.role !== undefined) {
       values.role = user.role;
       updateSet.role = user.role;
     } else if (user.openId === ENV.ownerOpenId) {
       values.role = 'admin';
       updateSet.role = 'admin';
-    }
-
-    if (!values.lastSignedIn) {
-      values.lastSignedIn = new Date();
-    }
-
-    if (Object.keys(updateSet).length === 0) {
-      updateSet.lastSignedIn = new Date();
     }
 
     await db.insert(users).values(values).onConflictDoUpdate({

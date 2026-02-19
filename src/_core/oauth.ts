@@ -57,11 +57,15 @@ export function registerOAuthRoutes(app: Express) {
         return;
       }
 
+      // Normalizar loginMethod: convertir cadenas vacías a null
+      const loginMethod = userInfo.loginMethod || userInfo.platform || null;
+      const normalizedLoginMethod = (loginMethod === "" || loginMethod === null) ? null : loginMethod;
+
       await db.upsertUser({
         openId: userInfo.openId,
         name: userInfo.name || null,
         email: userInfo.email ?? null,
-        loginMethod: userInfo.loginMethod ?? userInfo.platform ?? null,
+        loginMethod: normalizedLoginMethod,
         lastSignedIn: new Date(),
       });
       console.log("[OAuth] User upserted successfully");

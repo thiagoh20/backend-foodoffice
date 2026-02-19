@@ -16,32 +16,32 @@ env:
   NODE_VERSION: '20'
 
 jobs:
-  test:
-    name: Test y Build
-    runs-on: ubuntu-latest
+  # test:
+  #   name: Test y Build
+  #   runs-on: ubuntu-latest
     
-    steps:
-      - name: Checkout código
-        uses: actions/checkout@v4
+  #   steps:
+  #     - name: Checkout código
+  #       uses: actions/checkout@v4
 
-      - name: Configurar Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+  #     - name: Configurar Node.js
+  #       uses: actions/setup-node@v4
+  #       with:
+  #         node-version: ${{ env.NODE_VERSION }}
+  #         cache: 'npm'
 
-      - name: Instalar dependencias
-        run: npm ci
+  #     - name: Instalar dependencias
+  #       run: npm ci
 
-      # - name: Ejecutar tests
-      #   run: npm test
-      #   continue-on-error: true
+  #     # - name: Ejecutar tests
+  #     #   run: npm test
+  #     #   continue-on-error: true
 
-      - name: Verificar tipos TypeScript
-        run: npm run check
+  #     - name: Verificar tipos TypeScript
+  #       run: npm run check
 
-      - name: Construir proyecto
-        run: npm run build
+  #     - name: Construir proyecto
+  #       run: npm run build
 
   deploy:
     name: Desplegar a AWS

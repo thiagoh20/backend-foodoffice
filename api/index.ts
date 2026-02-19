@@ -8,6 +8,7 @@ import { getSessionCookieOptions } from "../src/_core/cookies.js";
 import { sdk } from "../src/_core/sdk.js";
 import * as db from "../src/db.js";
 import { ENV } from "../src/_core/env.js";
+import { sql } from "drizzle-orm";
 
 /**
  * Express app (singleton)
@@ -50,6 +51,59 @@ app.get("/api/env-check", async (req: Request, res: Response) => {
       OWNER_OPEN_ID: process.env.OWNER_OPEN_ID || "(no definido)",
     },
   });
+});
+
+// Endpoint de diagnóstico para verificar conexión a base de datos
+app.get("/api/db-check", async (req: Request, res: Response) => {
+  try {
+    const dbConnectionTest = await db.testDbConnection();
+    
+    if (!dbConnectionTest.success) {
+      res.status(500).json({
+        success: false,
+        error: dbConnectionTest.error,
+        message: "No se pudo conectar a la base de datos",
+        hasDatabaseUrl: !!process.env.DATABASE_URL,
+      });
+      return;
+    }
+
+    // Intentar verificar si las tablas existen
+    const dbInstance = await db.getDb();
+    let tablesExist = false;
+    let tablesError: string | undefined;
+
+    if (dbInstance) {
+      try {
+        // Intentar una query simple a la tabla de productos
+        await dbInstance.execute(sql`SELECT 1 FROM products LIMIT 1`);
+        tablesExist = true;
+      } catch (error) {
+        tablesError = error instanceof Error ? error.message : String(error);
+        // Verificar si es un error de tabla no existe
+        if (tablesError.includes("does not exist") || (tablesError.includes("relation") && tablesError.includes("does not exist"))) {
+          tablesError = "Las tablas no existen. Ejecuta las migraciones: npm run db:push o drizzle-kit migrate";
+        }
+      }
+    }
+
+    res.json({
+      success: true,
+      connection: "OK",
+      tablesExist,
+      tablesError,
+      hasDatabaseUrl: !!process.env.DATABASE_URL,
+      message: tablesExist 
+        ? "Base de datos conectada y tablas disponibles" 
+        : "Base de datos conectada pero las tablas no existen. Ejecuta las migraciones.",
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+      hasDatabaseUrl: !!process.env.DATABASE_URL,
+    });
+  }
 });
 
 // OAuth routes

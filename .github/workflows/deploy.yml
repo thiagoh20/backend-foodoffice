@@ -111,6 +111,145 @@ jobs:
           echo "api_url=$API_URL" >> $GITHUB_OUTPUT
           echo "API desplegada en: $API_URL"
 
+      - name: Verificar Security Groups
+        run: |
+          echo "🔍 Verificando configuración de Security Groups..."
+          
+          LAMBDA_SG="${{ secrets.SECURITY_GROUP_ID }}"
+          RDS_SG="${{ secrets.RDS_SECURITY_GROUP_ID }}"
+          
+          if [ -z "$RDS_SG" ]; then
+            echo "⚠️  RDS_SECURITY_GROUP_ID no está configurado. Saltando verificación de Security Groups."
+            exit 0
+          fi
+          
+          # Verificar Lambda Security Group (Egress)
+          echo "1️⃣  Verificando Lambda Security Group (Egress)..."
+          LAMBDA_OUTBOUND=$(aws ec2 describe-security-groups \
+            --group-ids $LAMBDA_SG \
+            --query 'SecurityGroups[0].IpPermissionsEgress[?FromPort==`5432` && ToPort==`5432` && IpProtocol==`tcp`]' \
+            --output json 2>/dev/null || echo "[]")
+          
+          if [ "$LAMBDA_OUTBOUND" == "[]" ] || [ "$LAMBDA_OUTBOUND" == "null" ]; then
+            echo "❌ Lambda Security Group NO permite tráfico saliente al puerto 5432"
+            echo "   Configura la regla:"
+            echo "   aws ec2 authorize-security-group-egress \\"
+            echo "     --group-id $LAMBDA_SG \\"
+            echo "     --ip-permissions IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=$RDS_SG}]"
+            exit 1
+          else
+            # Verificar que permite hacia RDS específicamente
+            ALLOWS_RDS=$(echo "$LAMBDA_OUTBOUND" | jq -r '.[] | select(.UserIdGroupPairs[].GroupId == "'$RDS_SG'") | .UserIdGroupPairs[].GroupId' 2>/dev/null || echo "")
+            if [ -z "$ALLOWS_RDS" ]; then
+              echo "⚠️  Lambda Security Group permite tráfico al 5432, pero NO específicamente hacia RDS Security Group"
+              echo "   Se recomienda configurar la regla específica para mayor seguridad"
+            else
+              echo "✅ Lambda Security Group permite tráfico saliente al puerto 5432 hacia RDS"
+            fi
+          fi
+          
+          # Verificar RDS Security Group (Ingress)
+          echo "2️⃣  Verificando RDS Security Group (Ingress)..."
+          RDS_INBOUND=$(aws ec2 describe-security-groups \
+            --group-ids $RDS_SG \
+            --query 'SecurityGroups[0].IpPermissions[?FromPort==`5432` && ToPort==`5432` && IpProtocol==`tcp`]' \
+            --output json 2>/dev/null || echo "[]")
+          
+          if [ "$RDS_INBOUND" == "[]" ] || [ "$RDS_INBOUND" == "null" ]; then
+            echo "❌ RDS Security Group NO permite tráfico entrante en el puerto 5432"
+            echo "   Configura la regla:"
+            echo "   aws ec2 authorize-security-group-ingress \\"
+            echo "     --group-id $RDS_SG \\"
+            echo "     --ip-permissions IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=$LAMBDA_SG}]"
+            exit 1
+          else
+            # Verificar que permite desde Lambda específicamente
+            ALLOWS_LAMBDA=$(echo "$RDS_INBOUND" | jq -r '.[] | select(.UserIdGroupPairs[].GroupId == "'$LAMBDA_SG'") | .UserIdGroupPairs[].GroupId' 2>/dev/null || echo "")
+            if [ -z "$ALLOWS_LAMBDA" ]; then
+              echo "❌ RDS Security Group permite tráfico en 5432, pero NO desde Lambda Security Group"
+              echo "   Configura la regla:"
+              echo "   aws ec2 authorize-security-group-ingress \\"
+              echo "     --group-id $RDS_SG \\"
+              echo "     --ip-permissions IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=$LAMBDA_SG}]"
+              exit 1
+            else
+              echo "✅ RDS Security Group permite tráfico entrante desde Lambda en puerto 5432"
+            fi
+          fi
+          
+          echo "✅ Security Groups configurados correctamente"
+
+      - name: Esperar propagación de cambios
+        run: |
+          echo "⏳ Esperando 15 segundos para que los cambios se propaguen..."
+          sleep 15
+
+      - name: Verificar conexión a base de datos
+        run: |
+          echo "🔍 Verificando conexión a la base de datos..."
+          
+          API_URL="${{ steps.get-api-url.outputs.api_url }}"
+          MAX_RETRIES=5
+          RETRY_DELAY=10
+          
+          for i in $(seq 1 $MAX_RETRIES); do
+            echo "Intento $i/$MAX_RETRIES..."
+            
+            RESPONSE=$(curl -s -w "\n%{http_code}" "$API_URL/api/db-check" || echo "")
+            HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+            BODY=$(echo "$RESPONSE" | sed '$d')
+            
+            if [ "$HTTP_CODE" == "200" ]; then
+              SUCCESS=$(echo "$BODY" | jq -r '.success' 2>/dev/null || echo "false")
+              
+              if [ "$SUCCESS" == "true" ]; then
+                echo "✅ Conexión a la base de datos exitosa"
+                echo "$BODY" | jq '.'
+                
+                # Verificar si las tablas existen
+                TABLES_EXIST=$(echo "$BODY" | jq -r '.tablesExist' 2>/dev/null || echo "false")
+                if [ "$TABLES_EXIST" == "true" ]; then
+                  echo "✅ Las tablas existen en la base de datos"
+                else
+                  echo "⚠️  Las tablas no existen. Se ejecutarán las migraciones."
+                fi
+                
+                exit 0
+              else
+                ERROR=$(echo "$BODY" | jq -r '.error' 2>/dev/null || echo "Error desconocido")
+                echo "❌ Error en la conexión: $ERROR"
+                
+                # Mostrar troubleshooting si está disponible
+                TROUBLESHOOTING=$(echo "$BODY" | jq -r '.troubleshooting[]?' 2>/dev/null || echo "")
+                if [ -n "$TROUBLESHOOTING" ]; then
+                  echo "💡 Troubleshooting:"
+                  echo "$TROUBLESHOOTING" | while read line; do
+                    echo "   - $line"
+                  done
+                fi
+                
+                if [ $i -lt $MAX_RETRIES ]; then
+                  echo "⏳ Reintentando en $RETRY_DELAY segundos..."
+                  sleep $RETRY_DELAY
+                else
+                  echo "❌ No se pudo conectar a la base de datos después de $MAX_RETRIES intentos"
+                  exit 1
+                fi
+              fi
+            else
+              echo "❌ Error HTTP $HTTP_CODE al verificar conexión"
+              echo "Respuesta: $BODY"
+              
+              if [ $i -lt $MAX_RETRIES ]; then
+                echo "⏳ Reintentando en $RETRY_DELAY segundos..."
+                sleep $RETRY_DELAY
+              else
+                echo "❌ No se pudo verificar la conexión después de $MAX_RETRIES intentos"
+                exit 1
+              fi
+            fi
+          done
+
       - name: Ejecutar migraciones de base de datos
         env:
           DATABASE_URL: postgresql://${{ secrets.DATABASE_USER }}:${{ secrets.DATABASE_PASSWORD }}@${{ secrets.DATABASE_HOST }}:5432/${{ secrets.DATABASE_NAME }}
@@ -118,3 +257,23 @@ jobs:
           echo "🔄 Ejecutando migraciones de base de datos..."
           npm run db:push
           echo "✅ Migraciones completadas"
+          
+          # Verificar nuevamente después de las migraciones
+          echo "🔍 Verificando conexión después de las migraciones..."
+          API_URL="${{ steps.get-api-url.outputs.api_url }}"
+          sleep 5
+          
+          RESPONSE=$(curl -s "$API_URL/api/db-check" || echo "")
+          SUCCESS=$(echo "$RESPONSE" | jq -r '.success' 2>/dev/null || echo "false")
+          TABLES_EXIST=$(echo "$RESPONSE" | jq -r '.tablesExist' 2>/dev/null || echo "false")
+          
+          if [ "$SUCCESS" == "true" ] && [ "$TABLES_EXIST" == "true" ]; then
+            echo "✅ Base de datos conectada y tablas disponibles"
+          elif [ "$SUCCESS" == "true" ]; then
+            echo "⚠️  Base de datos conectada pero las tablas aún no existen"
+            echo "   Esto puede ser normal si las migraciones están en progreso"
+          else
+            echo "❌ Error en la conexión después de las migraciones"
+            echo "$RESPONSE" | jq '.'
+            exit 1
+          fi

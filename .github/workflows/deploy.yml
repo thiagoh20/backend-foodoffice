@@ -20,6 +20,7 @@ jobs:
   deploy:
     name: Desplegar a AWS
     runs-on: ubuntu-latest
+    environment: aws
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     
     steps:

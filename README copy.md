@@ -29,6 +29,9 @@ Esto iniciará PostgreSQL en el puerto 5432 con las siguientes credenciales por 
 - Contraseña: `foodoffice123`
 - Base de datos: `foodoffice`
 
+
+
+
 Puedes personalizar estas credenciales creando un archivo `.env` con las variables:
 - `POSTGRES_USER`
 - `POSTGRES_PASSWORD`

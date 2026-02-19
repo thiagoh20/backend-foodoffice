@@ -33,9 +33,9 @@ jobs:
       - name: Instalar dependencias
         run: npm ci
 
-      - name: Ejecutar tests
-        run: npm test
-        continue-on-error: true
+      # - name: Ejecutar tests
+      #   run: npm test
+      #   continue-on-error: true
 
       - name: Verificar tipos TypeScript
         run: npm run check

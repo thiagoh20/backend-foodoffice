@@ -1,0 +1,16 @@
+node_modules/
+.git/
+.env
+.env.local
+*.log
+dist/
+coverage/
+.vscode/
+.idea/
+*.test.ts
+*.test.js
+terraform/
+*.tfstate
+*.tfvars
+drizzle/
+patches/

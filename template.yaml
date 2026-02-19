@@ -1,0 +1,115 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: FoodOffice Backend - Lambda + API Gateway
+
+Globals:
+  Function:
+    Timeout: 28  # Free Tier: máximo 30s, usar 28s para margen de seguridad
+    MemorySize: 512  # Free Tier: hasta 512 MB incluido
+    Runtime: nodejs20.x
+    Environment:
+      Variables:
+        NODE_ENV: production
+
+Parameters:
+  DatabaseHost:
+    Type: String
+    Description: RDS Database Endpoint (from Terraform output)
+  DatabaseName:
+    Type: String
+    Default: foodoffice
+    Description: Database name
+  DatabaseUser:
+    Type: String
+    Default: foodoffice
+    Description: Database username
+  DatabasePassword:
+    Type: String
+    NoEcho: true
+    Description: Database password (use AWS Secrets Manager in production)
+  JwtSecret:
+    Type: String
+    NoEcho: true
+    Description: JWT Secret for session cookies
+  SubnetIds:
+    Type: CommaDelimitedList
+    Description: Subnet IDs for Lambda (from Terraform output)
+  SecurityGroupId:
+    Type: String
+    Description: Security Group ID for Lambda to access RDS (from Terraform output)
+  AllowedOrigins:
+    Type: String
+    Default: "*"
+    Description: Allowed CORS origins (comma-separated)
+
+Resources:
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./
+      Handler: dist/lambda.handler
+      Runtime: nodejs20.x
+      Timeout: 28  # Free Tier: máximo 30s
+      MemorySize: 512  # Free Tier: hasta 512 MB
+      Environment:
+        Variables:
+          DATABASE_URL: !Sub 
+            - 'postgresql://${DatabaseUser}:${DatabasePassword}@${DatabaseHost}:5432/${DatabaseName}'
+            - DatabaseHost: !Ref DatabaseHost
+              DatabaseUser: !Ref DatabaseUser
+              DatabasePassword: !Ref DatabasePassword
+              DatabaseName: !Ref DatabaseName
+          JWT_SECRET: !Ref JwtSecret
+          NODE_ENV: production
+          ALLOWED_ORIGINS: !Ref AllowedOrigins
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref SecurityGroupId
+        SubnetIds: !Ref SubnetIds
+      Policies:
+        - AWSLambdaVPCAccessExecutionRole
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /{proxy+}
+            Method: ANY
+        ApiRoot:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /
+            Method: ANY
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins: !Split
+          - ","
+          - !Ref AllowedOrigins
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+          - PATCH
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+          - Cookie
+        AllowCredentials: true
+        MaxAge: 3600
+
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint URL
+    Value: !Sub 'https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com'
+  ApiFunctionArn:
+    Description: Lambda Function ARN
+    Value: !GetAtt ApiFunction.Arn
+  ApiFunctionName:
+    Description: Lambda Function Name
+    Value: !Ref ApiFunction

@@ -1,0 +1,12 @@
+{
+  "Parameters": {
+    "DatabaseHost": "foodoffice-db.xxxxx.us-east-1.rds.amazonaws.com",
+    "DatabaseName": "foodoffice",
+    "DatabaseUser": "foodoffice",
+    "DatabasePassword": "CHANGE_ME",
+    "JwtSecret": "CHANGE_ME",
+    "SubnetIds": "subnet-xxxxx,subnet-yyyyy",
+    "SecurityGroupId": "sg-xxxxx",
+    "AllowedOrigins": "https://tu-dominio.com,http://localhost:5173"
+  }
+}

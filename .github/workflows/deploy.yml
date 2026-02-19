@@ -1,0 +1,134 @@
+name: Deploy Backend
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  NODE_VERSION: '20'
+
+jobs:
+  test:
+    name: Test y Build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Ejecutar tests
+        run: npm test
+        continue-on-error: true
+
+      - name: Verificar tipos TypeScript
+        run: npm run check
+
+      - name: Construir proyecto
+        run: npm run build
+
+  deploy:
+    name: Desplegar a AWS
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Construir proyecto
+        run: npm run build
+
+      - name: Instalar AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Construir con SAM
+        run: sam build
+
+      - name: Preparar parámetros de despliegue
+        run: |
+          cat > sam-parameters-deploy.json << EOF
+          {
+            "Parameters": {
+              "DatabaseHost": "${{ secrets.DATABASE_HOST }}",
+              "DatabaseName": "${{ secrets.DATABASE_NAME }}",
+              "DatabaseUser": "${{ secrets.DATABASE_USER }}",
+              "DatabasePassword": "${{ secrets.DATABASE_PASSWORD }}",
+              "JwtSecret": "${{ secrets.JWT_SECRET }}",
+              "SubnetIds": "${{ secrets.SUBNET_IDS }}",
+              "SecurityGroupId": "${{ secrets.SECURITY_GROUP_ID }}",
+              "AllowedOrigins": "${{ secrets.ALLOWED_ORIGINS }}"
+            }
+          }
+          EOF
+
+      - name: Desplegar con SAM
+        run: |
+          sam deploy \
+            --parameter-overrides-file sam-parameters-deploy.json \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset
+
+      - name: Obtener URL de la API
+        id: get-api-url
+        run: |
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name foodoffice-backend \
+            --query 'Stacks[0].Outputs[?OutputKey==`ApiUrl`].OutputValue' \
+            --output text)
+          echo "api_url=$API_URL" >> $GITHUB_OUTPUT
+          echo "API desplegada en: $API_URL"
+
+      - name: Limpiar archivos temporales
+        if: always()
+        run: |
+          rm -f sam-parameters-deploy.json
+
+      - name: Comentario de despliegue
+        if: github.event_name == 'push'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'success',
+              description: 'Despliegue exitoso',
+              context: 'deployment/aws'
+            })

@@ -263,6 +263,94 @@ jobs:
             --query 'SecurityGroups[0].IpPermissions[?FromPort==`5432` && ToPort==`5432` && IpProtocol==`tcp`]' \
             --output json 2>/dev/null | jq '.' || echo "   No se pudo verificar"
 
+      - name: Diagnóstico de configuración de Lambda
+        run: |
+          echo "🔍 Diagnóstico de configuración de Lambda..."
+          
+          LAMBDA_SG="${{ secrets.SECURITY_GROUP_ID }}"
+          
+          # Obtener nombre de la función Lambda
+          LAMBDA_FUNCTION=$(aws lambda list-functions \
+            --query 'Functions[?contains(FunctionName, `foodoffice-backend`) && contains(FunctionName, `ApiFunction`)].FunctionName' \
+            --output text 2>/dev/null | head -1)
+          
+          if [ -z "$LAMBDA_FUNCTION" ]; then
+            echo "⚠️  No se encontró la función Lambda"
+            exit 0
+          fi
+          
+          echo "✅ Función Lambda: $LAMBDA_FUNCTION"
+          echo ""
+          
+          # Verificar configuración de VPC
+          echo "1️⃣  Verificando configuración de VPC de Lambda..."
+          VPC_CONFIG=$(aws lambda get-function-configuration \
+            --function-name "$LAMBDA_FUNCTION" \
+            --query 'VpcConfig' \
+            --output json 2>/dev/null)
+          
+          LAMBDA_SGS=$(echo "$VPC_CONFIG" | jq -r '.SecurityGroupIds[]?' 2>/dev/null || echo "")
+          LAMBDA_SUBNETS=$(echo "$VPC_CONFIG" | jq -r '.SubnetIds[]?' 2>/dev/null || echo "")
+          LAMBDA_VPC_ID=$(echo "$VPC_CONFIG" | jq -r '.VpcId' 2>/dev/null || echo "")
+          
+          echo "Security Groups configurados en Lambda:"
+          echo "$LAMBDA_SGS" | while read SG; do
+            if [ -n "$SG" ]; then
+              if [ "$SG" == "$LAMBDA_SG" ]; then
+                echo "  ✅ $SG (correcto)"
+              else
+                echo "  ⚠️  $SG (esperado: $LAMBDA_SG)"
+              fi
+            fi
+          done
+          
+          echo ""
+          echo "Subnets configuradas:"
+          echo "$LAMBDA_SUBNETS" | while read SUBNET; do
+            if [ -n "$SUBNET" ]; then
+              echo "  - $SUBNET"
+            fi
+          done
+          
+          echo ""
+          echo "VPC ID: $LAMBDA_VPC_ID"
+          echo ""
+          
+          # Verificar DATABASE_URL
+          echo "2️⃣  Verificando DATABASE_URL..."
+          DATABASE_URL=$(aws lambda get-function-configuration \
+            --function-name "$LAMBDA_FUNCTION" \
+            --query 'Environment.Variables.DATABASE_URL' \
+            --output text 2>/dev/null || echo "")
+          
+          if [ -n "$DATABASE_URL" ] && [ "$DATABASE_URL" != "None" ]; then
+            DB_HOST=$(echo "$DATABASE_URL" | sed -n 's/.*@\([^:]*\):.*/\1/p')
+            echo "✅ DATABASE_URL configurado"
+            echo "   Host: $DB_HOST"
+            
+            if echo "$DB_HOST" | grep -q "\.rds\.amazonaws\.com"; then
+              echo "   ✅ Hostname parece ser un endpoint de RDS"
+            else
+              echo "   ⚠️  Hostname no parece ser un endpoint de RDS"
+            fi
+          else
+            echo "❌ DATABASE_URL NO está configurado"
+          fi
+          echo ""
+          
+          # Verificar logs recientes
+          echo "3️⃣  Revisando logs recientes de Lambda..."
+          LOG_GROUP="/aws/lambda/$LAMBDA_FUNCTION"
+          
+          if aws logs describe-log-groups --log-group-name-prefix "$LOG_GROUP" --query 'logGroups[0].logGroupName' --output text 2>/dev/null | grep -q "$LOG_GROUP"; then
+            echo "Últimos errores relacionados con base de datos:"
+            aws logs tail "$LOG_GROUP" --since 30m --format short 2>/dev/null | \
+              grep -i "error\|database\|connection\|timeout\|ECONNREFUSED\|ENOTFOUND\|Failed query" | \
+              tail -10 || echo "   No se encontraron errores recientes"
+          else
+            echo "⚠️  No se encontró el log group"
+          fi
+
       - name: Esperar propagación de cambios
         run: |
           echo "⏳ Esperando 30 segundos para que los cambios de Security Groups se propaguen..."
@@ -341,34 +429,107 @@ jobs:
                 echo ""
                 echo "❌ No se pudo conectar a la base de datos después de $MAX_RETRIES intentos"
                 echo ""
-                echo "🔍 Diagnóstico adicional:"
+                echo "🔍 DIAGNÓSTICO DETALLADO:"
                 echo ""
-                echo "1️⃣  Verificando configuración de Lambda..."
+                
                 LAMBDA_FUNCTION=$(aws lambda list-functions \
                   --query 'Functions[?contains(FunctionName, `foodoffice-backend`) && contains(FunctionName, `ApiFunction`)].FunctionName' \
                   --output text 2>/dev/null | head -1)
                 
-                if [ -n "$LAMBDA_FUNCTION" ]; then
-                  echo "   Función: $LAMBDA_FUNCTION"
-                  echo "   VPC Config:"
-                  aws lambda get-function-configuration \
-                    --function-name "$LAMBDA_FUNCTION" \
-                    --query 'VpcConfig' \
-                    --output json 2>/dev/null | jq '.' || echo "   No se pudo obtener"
-                  
-                  echo ""
-                  echo "2️⃣  Últimos logs de CloudWatch (últimas 10 líneas):"
-                  LOG_GROUP="/aws/lambda/$LAMBDA_FUNCTION"
-                  aws logs tail "$LOG_GROUP" --since 5m --format short 2>/dev/null | tail -10 || echo "   No se pudieron obtener logs"
+                if [ -z "$LAMBDA_FUNCTION" ]; then
+                  echo "❌ No se encontró la función Lambda"
+                  exit 1
                 fi
                 
-                echo ""
-                echo "3️⃣  Verificando Security Groups una vez más..."
                 LAMBDA_SG="${{ secrets.SECURITY_GROUP_ID }}"
                 RDS_SG="${{ secrets.RDS_SECURITY_GROUP_ID }}"
                 if [ -z "$RDS_SG" ]; then
                   RDS_SG="sg-05ab21fca371a7df5"
                 fi
+                
+                echo "1️⃣  Configuración de VPC de Lambda:"
+                VPC_CONFIG=$(aws lambda get-function-configuration \
+                  --function-name "$LAMBDA_FUNCTION" \
+                  --query 'VpcConfig' \
+                  --output json 2>/dev/null)
+                
+                LAMBDA_SGS_ACTUAL=$(echo "$VPC_CONFIG" | jq -r '.SecurityGroupIds[]?' 2>/dev/null || echo "")
+                LAMBDA_SUBNETS=$(echo "$VPC_CONFIG" | jq -r '.SubnetIds[]?' 2>/dev/null || echo "")
+                LAMBDA_VPC_ID=$(echo "$VPC_CONFIG" | jq -r '.VpcId' 2>/dev/null || echo "")
+                
+                echo "   Función: $LAMBDA_FUNCTION"
+                echo "   VPC ID: $LAMBDA_VPC_ID"
+                echo "   Security Groups configurados:"
+                echo "$LAMBDA_SGS_ACTUAL" | while read SG; do
+                  if [ -n "$SG" ]; then
+                    if [ "$SG" == "$LAMBDA_SG" ]; then
+                      echo "     ✅ $SG (correcto)"
+                    else
+                      echo "     ⚠️  $SG (esperado: $LAMBDA_SG)"
+                    fi
+                  fi
+                done
+                echo "   Subnets:"
+                echo "$LAMBDA_SUBNETS" | while read SUBNET; do
+                  if [ -n "$SUBNET" ]; then
+                    echo "     - $SUBNET"
+                  fi
+                done
+                echo ""
+                
+                echo "2️⃣  Verificando DATABASE_URL:"
+                DATABASE_URL=$(aws lambda get-function-configuration \
+                  --function-name "$LAMBDA_FUNCTION" \
+                  --query 'Environment.Variables.DATABASE_URL' \
+                  --output text 2>/dev/null || echo "")
+                
+                if [ -n "$DATABASE_URL" ] && [ "$DATABASE_URL" != "None" ]; then
+                  DB_HOST=$(echo "$DATABASE_URL" | sed -n 's/.*@\([^:]*\):.*/\1/p')
+                  DB_PORT=$(echo "$DATABASE_URL" | sed -n 's/.*:\([0-9]*\)\/.*/\1/p')
+                  echo "   ✅ DATABASE_URL configurado"
+                  echo "   Host: $DB_HOST"
+                  echo "   Puerto: $DB_PORT"
+                  
+                  if echo "$DB_HOST" | grep -q "\.rds\.amazonaws\.com"; then
+                    echo "   ✅ Hostname es un endpoint de RDS"
+                  else
+                    echo "   ⚠️  Hostname NO parece ser un endpoint de RDS"
+                  fi
+                  
+                  # Verificar que RDS esté en el mismo VPC
+                  if [ -n "$LAMBDA_VPC_ID" ] && [ "$LAMBDA_VPC_ID" != "null" ]; then
+                    RDS_VPC=$(aws rds describe-db-instances \
+                      --query "DBInstances[?contains(Endpoint.Address, \`$DB_HOST\`)].DBSubnetGroup.VpcId" \
+                      --output text 2>/dev/null | head -1 || echo "")
+                    
+                    if [ -n "$RDS_VPC" ] && [ "$RDS_VPC" != "null" ]; then
+                      if [ "$LAMBDA_VPC_ID" == "$RDS_VPC" ]; then
+                        echo "   ✅ Lambda y RDS están en el mismo VPC ($LAMBDA_VPC_ID)"
+                      else
+                        echo "   ❌ Lambda y RDS están en VPCs diferentes"
+                        echo "      Lambda VPC: $LAMBDA_VPC_ID"
+                        echo "      RDS VPC: $RDS_VPC"
+                      fi
+                    fi
+                  fi
+                else
+                  echo "   ❌ DATABASE_URL NO está configurado"
+                fi
+                echo ""
+                
+                echo "3️⃣  Logs de CloudWatch (últimos errores):"
+                LOG_GROUP="/aws/lambda/$LAMBDA_FUNCTION"
+                if aws logs describe-log-groups --log-group-name-prefix "$LOG_GROUP" --query 'logGroups[0].logGroupName' --output text 2>/dev/null | grep -q "$LOG_GROUP"; then
+                  echo "   Buscando errores relacionados con base de datos..."
+                  aws logs tail "$LOG_GROUP" --since 10m --format short 2>/dev/null | \
+                    grep -i -E "error|database|connection|timeout|ECONNREFUSED|ENOTFOUND|Failed query|getaddrinfo" | \
+                    tail -20 || echo "   No se encontraron errores específicos"
+                else
+                  echo "   ⚠️  No se encontró el log group"
+                fi
+                echo ""
+                
+                echo "4️⃣  Verificando Security Groups (confirmación final):"
                 
                 echo "   Lambda SG ($LAMBDA_SG) - Reglas de salida al 5432:"
                 aws ec2 describe-security-groups \

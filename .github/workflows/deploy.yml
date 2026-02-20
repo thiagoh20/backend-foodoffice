@@ -118,21 +118,23 @@ jobs:
           LAMBDA_SG="${{ secrets.SECURITY_GROUP_ID }}"
           RDS_SG="${{ secrets.RDS_SECURITY_GROUP_ID }}"
           
-          # Valores conocidos de Terraform (dev environment)
-          # Si RDS_SECURITY_GROUP_ID no está configurado, intentar usar valores conocidos
+          # Valores de Terraform (dev environment) - Ver TERRAFORM_OUTPUTS.md
+          # Lambda SG: sg-07387339b35fe5c83
+          # RDS SG: sg-05ab21fca371a7df5
+          # Si RDS_SECURITY_GROUP_ID no está configurado, usar valor de Terraform
           if [ -z "$RDS_SG" ]; then
             echo "⚠️  RDS_SECURITY_GROUP_ID no está configurado en los secrets."
             echo ""
-            echo "💡 Intentando usar valores conocidos de Terraform (dev environment)..."
-            echo "   Lambda SG: $LAMBDA_SG"
-            echo "   RDS SG (asumido): sg-05ab21fca371a7df5"
+            echo "💡 Usando valor de Terraform (dev environment)..."
+            echo "   Lambda SG: $LAMBDA_SG (de Terraform: sg-07387339b35fe5c83)"
+            echo "   RDS SG (Terraform): sg-05ab21fca371a7df5"
             echo ""
-            echo "📋 Si estos valores no son correctos, configura RDS_SECURITY_GROUP_ID en los secrets."
+            echo "📋 Para evitar este mensaje, configura RDS_SECURITY_GROUP_ID en los secrets."
             echo ""
             
-            # Usar valor conocido de Terraform para dev
+            # Valor de Terraform output: rds_security_group_id
             RDS_SG="sg-05ab21fca371a7df5"
-            echo "🔧 Usando RDS Security Group: $RDS_SG"
+            echo "🔧 Usando RDS Security Group de Terraform: $RDS_SG"
           else
             echo "✅ RDS_SECURITY_GROUP_ID configurado: $RDS_SG"
           fi
@@ -444,6 +446,7 @@ jobs:
                 LAMBDA_SG="${{ secrets.SECURITY_GROUP_ID }}"
                 RDS_SG="${{ secrets.RDS_SECURITY_GROUP_ID }}"
                 if [ -z "$RDS_SG" ]; then
+                  # Valor de Terraform output: rds_security_group_id
                   RDS_SG="sg-05ab21fca371a7df5"
                 fi
                 

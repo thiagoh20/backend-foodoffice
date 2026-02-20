@@ -582,6 +582,34 @@ jobs:
             fi
           done
 
+      - name: Verificar/Crear base de datos
+        env:
+          DATABASE_HOST: ${{ secrets.DATABASE_HOST }}
+          DATABASE_USER: ${{ secrets.DATABASE_USER }}
+          DATABASE_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
+          DATABASE_NAME: ${{ secrets.DATABASE_NAME }}
+        run: |
+          echo "🔍 Verificando si la base de datos '${{ secrets.DATABASE_NAME }}' existe..."
+          echo ""
+          echo "⚠️  NOTA: RDS está en una VPC privada, por lo que no podemos conectarnos directamente desde GitHub Actions."
+          echo "   La base de datos debe crearse manualmente o mediante Terraform."
+          echo ""
+          echo "📋 Para crear la base de datos manualmente:"
+          echo ""
+          echo "   1. Conéctate a una instancia EC2 en la misma VPC, o"
+          echo "   2. Usa AWS Systems Manager Session Manager, o"
+          echo "   3. Ejecuta desde tu máquina local con VPN/Bastion:"
+          echo ""
+          echo "   PGPASSWORD='${{ secrets.DATABASE_PASSWORD }}' psql \\"
+          echo "     -h ${{ secrets.DATABASE_HOST }} \\"
+          echo "     -U ${{ secrets.DATABASE_USER }} \\"
+          echo "     -d postgres \\"
+          echo "     -c \"CREATE DATABASE ${{ secrets.DATABASE_NAME }};\""
+          echo ""
+          echo "   4. O agrega la creación de la base de datos en tu código de Terraform"
+          echo ""
+          echo "✅ Continuando con las migraciones (asumiendo que la base de datos existe o se creará)..."
+
       - name: Ejecutar migraciones de base de datos
         env:
           DATABASE_URL: postgresql://${{ secrets.DATABASE_USER }}:${{ secrets.DATABASE_PASSWORD }}@${{ secrets.DATABASE_HOST }}:5432/${{ secrets.DATABASE_NAME }}

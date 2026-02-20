@@ -86,14 +86,14 @@ jobs:
         run: |
           sam deploy \
             --parameter-overrides \
-              DatabaseHost="${{ secrets.DATABASE_HOST }}" \
-              DatabaseName="${{ secrets.DATABASE_NAME }}" \
-              DatabaseUser="${{ secrets.DATABASE_USER }}" \
+              DatabaseHost="foodoffice-dev-db.c4h62euy0hou.us-east-1.rds.amazonaws.com" \
+              DatabaseName="foodoffice" \
+              DatabaseUser="foodoffice" \
               DatabasePassword="${{ secrets.DATABASE_PASSWORD }}" \
               JwtSecret="${{ secrets.JWT_SECRET }}" \
-              SubnetIds="${{ secrets.SUBNET_IDS }}" \
-              SecurityGroupId="${{ secrets.SECURITY_GROUP_ID }}" \
-              AllowedOrigins="${{ secrets.ALLOWED_ORIGINS }}" \
+              SubnetIds="subnet-03958daace3e9dc12,subnet-0dce0f35cd8a3a467" \
+              SecurityGroupId="sg-07387339b35fe5c83" \
+              AllowedOrigins="https://dxjlixl4p5nd7.cloudfront.net,http://localhost:5173" \
               OAuthServerUrl="${{ secrets.OAUTH_SERVER_URL }}" \
               ViteAppId="${{ secrets.VITE_APP_ID }}" \
               OAuthClientSecret="${{ secrets.OAUTH_CLIENT_SECRET }}" \
@@ -115,7 +115,7 @@ jobs:
         run: |
           echo "🔍 Verificando configuración de Security Groups..."
           
-          LAMBDA_SG="${{ secrets.SECURITY_GROUP_ID }}"
+          LAMBDA_SG="sg-07387339b35fe5c83"
           RDS_SG="${{ secrets.RDS_SECURITY_GROUP_ID }}"
           
           # Valores de Terraform (dev environment) - Ver TERRAFORM_OUTPUTS.md
@@ -126,7 +126,7 @@ jobs:
             echo "⚠️  RDS_SECURITY_GROUP_ID no está configurado en los secrets."
             echo ""
             echo "💡 Usando valor de Terraform (dev environment)..."
-            echo "   Lambda SG: $LAMBDA_SG (de Terraform: sg-07387339b35fe5c83)"
+            echo "   Lambda SG: $LAMBDA_SG"
             echo "   RDS SG (Terraform): sg-05ab21fca371a7df5"
             echo ""
             echo "📋 Para evitar este mensaje, configura RDS_SECURITY_GROUP_ID en los secrets."
@@ -269,7 +269,7 @@ jobs:
         run: |
           echo "🔍 Diagnóstico de configuración de Lambda..."
           
-          LAMBDA_SG="${{ secrets.SECURITY_GROUP_ID }}"
+          LAMBDA_SG="sg-07387339b35fe5c83"
           
           # Obtener nombre de la función Lambda
           LAMBDA_FUNCTION=$(aws lambda list-functions \
@@ -405,13 +405,13 @@ jobs:
                   echo ""
                   echo "   # Lambda Security Group (Egress)"
                   echo "   aws ec2 authorize-security-group-egress \\"
-                  echo "     --group-id ${{ secrets.SECURITY_GROUP_ID }} \\"
+                  echo "     --group-id sg-07387339b35fe5c83 \\"
                   echo "     --ip-permissions IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=<RDS_SG_ID>}]"
                   echo ""
                   echo "   # RDS Security Group (Ingress)"
                   echo "   aws ec2 authorize-security-group-ingress \\"
                   echo "     --group-id <RDS_SG_ID> \\"
-                  echo "     --ip-permissions IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=${{ secrets.SECURITY_GROUP_ID }}}]"
+                  echo "     --ip-permissions IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=sg-07387339b35fe5c83}]"
                   echo ""
                 fi
                 
@@ -443,7 +443,7 @@ jobs:
                   exit 1
                 fi
                 
-                LAMBDA_SG="${{ secrets.SECURITY_GROUP_ID }}"
+                LAMBDA_SG="sg-07387339b35fe5c83"
                 RDS_SG="${{ secrets.RDS_SECURITY_GROUP_ID }}"
                 if [ -z "$RDS_SG" ]; then
                   # Valor de Terraform output: rds_security_group_id
@@ -587,12 +587,12 @@ jobs:
 
       - name: Verificar/Crear base de datos
         env:
-          DATABASE_HOST: ${{ secrets.DATABASE_HOST }}
-          DATABASE_USER: ${{ secrets.DATABASE_USER }}
+          DATABASE_HOST: foodoffice-dev-db.c4h62euy0hou.us-east-1.rds.amazonaws.com
+          DATABASE_USER: foodoffice
           DATABASE_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
-          DATABASE_NAME: ${{ secrets.DATABASE_NAME }}
+          DATABASE_NAME: foodoffice
         run: |
-          echo "🔍 Verificando si la base de datos '${{ secrets.DATABASE_NAME }}' existe..."
+          echo "🔍 Verificando si la base de datos 'foodoffice' existe..."
           echo ""
           echo "⚠️  NOTA: RDS está en una VPC privada, por lo que no podemos conectarnos directamente desde GitHub Actions."
           echo "   La base de datos debe crearse manualmente o mediante Terraform."
@@ -604,10 +604,10 @@ jobs:
           echo "   3. Ejecuta desde tu máquina local con VPN/Bastion:"
           echo ""
           echo "   PGPASSWORD='${{ secrets.DATABASE_PASSWORD }}' psql \\"
-          echo "     -h ${{ secrets.DATABASE_HOST }} \\"
-          echo "     -U ${{ secrets.DATABASE_USER }} \\"
+          echo "     -h foodoffice-dev-db.c4h62euy0hou.us-east-1.rds.amazonaws.com \\"
+          echo "     -U foodoffice \\"
           echo "     -d postgres \\"
-          echo "     -c \"CREATE DATABASE ${{ secrets.DATABASE_NAME }};\""
+          echo "     -c \"CREATE DATABASE foodoffice;\""
           echo ""
           echo "   4. O agrega la creación de la base de datos en tu código de Terraform"
           echo ""
@@ -615,7 +615,7 @@ jobs:
 
       - name: Ejecutar migraciones de base de datos
         env:
-          DATABASE_URL: postgresql://${{ secrets.DATABASE_USER }}:${{ secrets.DATABASE_PASSWORD }}@${{ secrets.DATABASE_HOST }}:5432/${{ secrets.DATABASE_NAME }}
+          DATABASE_URL: postgresql://foodoffice:${{ secrets.DATABASE_PASSWORD }}@foodoffice-dev-db.c4h62euy0hou.us-east-1.rds.amazonaws.com:5432/foodoffice
         run: |
           echo "🔄 Ejecutando migraciones de base de datos..."
           npm run db:push
